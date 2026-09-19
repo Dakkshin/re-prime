@@ -1,5 +1,15 @@
 # re-prime
 
+```
+####  #####    '  ####  ####   ###  #   # #####
+#   # #       '   #   # #   #   #   ## ## #
+####  ####        ####  ####    #   # # # ####
+#  #  #           #     #  #    #   #   # #
+#   # #####       #     #   #  ###  #   # #####
+
+   prime again, minus the bloat
+```
+
 ---
 
 **Update Sep 2026** re-prime is public. It's a fork of Prime Agent that adds a tape measure and four switches for long runs. The one part actually worth reading is [the one idea worth explaining](#the-one-idea-worth-explaining).
