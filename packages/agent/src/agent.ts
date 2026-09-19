@@ -22,6 +22,7 @@ import type {
 	BeforeToolCallContext,
 	BeforeToolCallResult,
 	GetContinuationMessagesContext,
+	PreTurnRouter,
 	ShouldStopAfterTurnContext,
 	StreamFn,
 	ToolExecutionMode,
@@ -107,6 +108,8 @@ export interface AgentOptions {
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
 	shouldStopBeforeTurn?: () => boolean;
 	getContinuationMessages?: (context: GetContinuationMessagesContext, signal?: AbortSignal) => Promise<AgentMessage[]>;
+	preTurnRouter?: PreTurnRouter;
+	maxConsecutiveReflexes?: number;
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
@@ -211,6 +214,8 @@ export class Agent {
 		context: GetContinuationMessagesContext,
 		signal?: AbortSignal,
 	) => Promise<AgentMessage[]>;
+	public preTurnRouter?: PreTurnRouter;
+	public maxConsecutiveReflexes?: number;
 	private activeRun?: ActiveRun;
 	public sessionId?: string;
 	public thinkingBudgets?: ThinkingBudgets;
@@ -230,6 +235,8 @@ export class Agent {
 		this.shouldStopAfterTurn = options.shouldStopAfterTurn;
 		this.shouldStopBeforeTurn = options.shouldStopBeforeTurn;
 		this.getContinuationMessages = options.getContinuationMessages;
+		this.preTurnRouter = options.preTurnRouter;
+		this.maxConsecutiveReflexes = options.maxConsecutiveReflexes;
 		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
@@ -485,6 +492,8 @@ export class Agent {
 			},
 			getFollowUpMessages: async () => this.followUpQueue.drain(),
 			getContinuationMessages: async (context, signal) => this.getContinuationMessages?.(context, signal) ?? [],
+			preTurnRouter: this.preTurnRouter,
+			maxConsecutiveReflexes: this.maxConsecutiveReflexes,
 		};
 	}
 

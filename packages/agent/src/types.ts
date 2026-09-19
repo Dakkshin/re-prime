@@ -115,6 +115,40 @@ export interface ShouldStopAfterTurnContext {
 
 export type GetContinuationMessagesContext = ShouldStopAfterTurnContext;
 
+/**
+ * A reflex action a `preTurnRouter` may take without a provider call.
+ *
+ * Only tool execution is supported. It reuses the normal tool pipeline, so the
+ * synthesized assistant tool call and its tool results enter the transcript in
+ * the same shape a model-authored call would.
+ */
+export interface PreTurnReflex {
+	/** Name of a tool available in the current context. */
+	toolName: string;
+	/**
+	 * Arguments for the tool. A reflex router should only target tools whose
+	 * arguments are known without model generation (zero-argument or derived).
+	 */
+	arguments?: Record<string, unknown>;
+}
+
+/** Context passed to `preTurnRouter` before a turn's provider call. */
+export interface PreTurnRouterContext {
+	/** Zero-based index of the upcoming turn. */
+	turnIndex: number;
+	/** Reflexes taken consecutively so far; reset after a provider turn. */
+	consecutiveReflexes: number;
+	/** Agent context at the decision point. */
+	context: AgentContext;
+}
+
+/**
+ * Decides whether to bypass the provider for the upcoming turn.
+ *
+ * Contract: must not throw. Return `undefined` to defer to the provider.
+ */
+export type PreTurnRouter = (context: PreTurnRouterContext) => Promise<PreTurnReflex | undefined>;
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
 
@@ -241,6 +275,21 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Contract: must not throw or reject. Return [] when no continuation should run.
 	 */
 	getContinuationMessages?: (context: GetContinuationMessagesContext, signal?: AbortSignal) => Promise<AgentMessage[]>;
+
+	/**
+	 * Optional pre-turn reflex router. Called before a turn's provider call while
+	 * no steering messages are pending. Returning a reflex executes that tool
+	 * without a provider call; returning `undefined` falls through to the model.
+	 */
+	preTurnRouter?: PreTurnRouter;
+
+	/**
+	 * Maximum number of consecutive reflex turns before the loop forces a
+	 * provider turn. Prevents a router that keeps returning a reflex from
+	 * spinning without model oversight. Defaults to
+	 * {@link DEFAULT_MAX_CONSECUTIVE_REFLEXES}.
+	 */
+	maxConsecutiveReflexes?: number;
 
 	/**
 	 * Tool execution mode. Defaults to `"parallel"`.
@@ -394,6 +443,8 @@ export type AgentEvent =
 	/** One assistant response and its resulting tool calls. */
 	| { type: "turn_start" }
 	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
+	/** A pre-turn reflex bypassed the provider for this turn. */
+	| { type: "reflex"; toolName: string; turnIndex: number; consecutiveReflexes: number }
 	/** Lifecycle events for user, assistant, and tool-result messages. */
 	| { type: "message_start"; message: AgentMessage }
 	/** Only emitted for assistant messages during streaming. */

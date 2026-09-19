@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { writeFileAtomicSync } from "../utils/atomic-file.js";
+import type { ContextBudgetSettings } from "./context-budget.js";
 import type { ProviderWaitPolicy } from "./provider-retry.js";
 
 const RECENT_MODELS_LIMIT = 20;
@@ -204,6 +205,7 @@ export interface Settings {
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	defaultServiceTier?: ServiceTier;
 	rlmMaxDepth?: number; // default for new sessions; unset falls through to RLM_MAX_DEPTH, then 2
+	contextBudget?: ContextBudgetSettings; // tool-output cap and image TTL; both disabled by default
 	idleEvictionMinutes?: number | "off"; // global daemon policy; default: 90
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
@@ -919,6 +921,10 @@ export class SettingsManager {
 
 	getTransport(): TransportSetting {
 		return this.settings.transport ?? "auto";
+	}
+
+	getContextBudgetSettings(): ContextBudgetSettings {
+		return this.settings.contextBudget ?? {};
 	}
 
 	setTransport(transport: TransportSetting): void {

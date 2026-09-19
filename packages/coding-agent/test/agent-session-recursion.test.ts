@@ -103,6 +103,7 @@ interface InspectableRlmRun {
 	status: string;
 	settled: boolean;
 	error?: string;
+	idleDeadline?: { fired: boolean };
 	abandonedForQuiescence?: boolean;
 	activity?: { kind: string };
 	progressNotes: string[];
@@ -2708,6 +2709,59 @@ print(_result.name)
 		} finally {
 			await manager.shutdown({ snapshot: true, drainHostRequests: true });
 		}
+	});
+
+	it("reaps an idle child once the configured deadline expires", async () => {
+		const previous = process.env.PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS;
+		process.env.PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS = "40";
+		try {
+			const { root, releaseChild, hasStarted } = createGatedRoot({}, ["hung child"]);
+			void root.runRlmChild("hung child");
+			await waitFor(hasStarted);
+			const runs = (root as unknown as InspectableRlmSession)._activeRlmChildRuns;
+			await waitFor(() => [...runs.values()].some((run) => run.status === "error"));
+			const run = [...runs.values()].find((candidate) => candidate.status === "error");
+			expect(run?.error).toContain("RLM_CHILD_ORPHAN_TIMEOUT");
+			releaseChild();
+			await root.waitForRlmQuiescence();
+		} finally {
+			if (previous === undefined) delete process.env.PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS;
+			else process.env.PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS = previous;
+		}
+	});
+
+	it("leaves an idle child armed and running when the deadline is disabled", async () => {
+		const { root, releaseChild, hasStarted } = createGatedRoot({}, ["idle child"]);
+		void root.runRlmChild("idle child");
+		await waitFor(hasStarted);
+		const runs = (root as unknown as InspectableRlmSession)._activeRlmChildRuns;
+		const run = [...runs.values()][0];
+		expect(run.idleDeadline).toBeUndefined();
+		releaseChild();
+		await waitFor(() => run.status === "done");
+	});
+
+	it("rejects a spawn the enabled Jev gate classifies as inline", async () => {
+		const previous = process.env.PRIME_AGENT_JEV_SPAWN_GATE;
+		process.env.PRIME_AGENT_JEV_SPAWN_GATE = "1";
+		try {
+			const root = createSession();
+			(root as unknown as { _jevSpawnGate?: () => Promise<string> })._jevSpawnGate = async () => "inline";
+			await expect(root.runRlmChild("trivial read")).rejects.toThrow("DELEGATION_REJECTED");
+		} finally {
+			if (previous === undefined) delete process.env.PRIME_AGENT_JEV_SPAWN_GATE;
+			else process.env.PRIME_AGENT_JEV_SPAWN_GATE = previous;
+		}
+	});
+
+	it("does not consult the Jev gate while the spawn gate is disabled", async () => {
+		const root = createSession();
+		const gate = vi.fn(async () => "inline");
+		(root as unknown as { _jevSpawnGate?: typeof gate })._jevSpawnGate = gate;
+		const handle = await root.runRlmChild("inline child");
+		expect(handle.rlm_child_id).toBeTruthy();
+		expect(gate).not.toHaveBeenCalled();
+		await root.waitForRlmQuiescence();
 	});
 });
 

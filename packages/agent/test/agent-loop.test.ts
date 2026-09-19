@@ -1964,3 +1964,92 @@ describe("agentLoopContinue with AgentMessage", () => {
 		expect(messages[0].role).toBe("assistant");
 	});
 });
+
+describe("pre-turn reflex routing", () => {
+	function createCountingTool(onExecute: () => void): AgentTool {
+		return {
+			name: "echo",
+			label: "Echo",
+			description: "no-op echo",
+			parameters: Type.Object({}),
+			execute: async () => {
+				onExecute();
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
+		};
+	}
+
+	function createStoppingStream(onCall: () => void) {
+		onCall();
+		const message = createAssistantMessage([{ type: "text", text: "done" }]);
+		const stream = new MockAssistantStream();
+		queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
+		return stream;
+	}
+
+	it("bypasses the provider and records the synthesized exchange", async () => {
+		const events: AgentEvent[] = [];
+		let toolExecutions = 0;
+		let providerCalls = 0;
+		let routerCalls = 0;
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [createCountingTool(() => (toolExecutions += 1))],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			preTurnRouter: async () => (routerCalls++ === 0 ? { toolName: "echo" } : undefined),
+		};
+
+		const messages = await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			config,
+			(event) => {
+				events.push(event);
+			},
+			undefined,
+			() => createStoppingStream(() => (providerCalls += 1)),
+		);
+
+		expect(toolExecutions).toBe(1);
+		expect(providerCalls).toBe(1);
+		expect(events.filter((event) => event.type === "reflex")).toHaveLength(1);
+		const reflexMessage = messages.find(
+			(message) => message.role === "assistant" && message.content.some((part) => part.type === "toolCall"),
+		);
+		expect(reflexMessage).toBeDefined();
+		const toolResult = messages.find((message) => message.role === "toolResult");
+		expect(toolResult?.role === "toolResult" ? toolResult.toolName : undefined).toBe("echo");
+	});
+
+	it("forces a provider turn after the reflex ceiling", async () => {
+		let toolExecutions = 0;
+		let providerCalls = 0;
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [createCountingTool(() => (toolExecutions += 1))],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			maxConsecutiveReflexes: 2,
+			preTurnRouter: async () => ({ toolName: "echo" }),
+		};
+
+		await runAgentLoop(
+			[createUserMessage("go")],
+			context,
+			config,
+			() => {},
+			undefined,
+			() => createStoppingStream(() => (providerCalls += 1)),
+		);
+
+		expect(toolExecutions).toBe(2);
+		expect(providerCalls).toBe(1);
+	});
+});

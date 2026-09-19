@@ -1,0 +1,5 @@
+- Added an opt-in tool-output cap that bounds oversized tool results to a head/tail window and points the model at the full output on disk, disabled by default.
+- Added an opt-in image TTL that replaces stale images with a text placeholder in the provider payload without altering the session transcript, disabled by default.
+- Changed the opt-in image TTL to evict only when the recovered tokens repay the prompt-cache prefix rewrite within a small payback window, so enabling it no longer risks a cache-write penalty on short sessions.
+- Added per-turn context statistics to the agent log.
+- Changed the Jev router to resolve its OpenRouter key from stored auth instead of requiring `OPENROUTER_API_KEY` to be set.

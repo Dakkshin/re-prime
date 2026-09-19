@@ -1,0 +1,3 @@
+- Added the Jev control-flow classifier contract, error-category helper, and confidence/entropy gate for pre-turn routing decisions.
+- Added a `preTurnRouter` seam to the agent loop that executes allow-listed reflex tool calls without a provider call, with a consecutive-reflex ceiling and a `reflex` telemetry event.
+- Added a `createJevStopGate` adapter that turns a gated `STOP` decision into a post-turn termination predicate.

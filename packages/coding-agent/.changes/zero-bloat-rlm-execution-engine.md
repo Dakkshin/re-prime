@@ -1,0 +1,4 @@
+- Added `PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS` to abort an RLM child that stops producing activity; disabled by default, and a child with a tool call in flight is never reaped.
+- Added `PRIME_AGENT_JEV_SPAWN_GATE` to reject `rlm.spawn` calls the Jev classifier judges trivial or redundant, with a `DELEGATION_REJECTED` directive; disabled by default and fail-open.
+- Added the `PRIME_AGENT_CONTEXT_JANITOR` phase-transition prune that replaces superseded failed tool output with a deterministic tombstone without dropping messages, gated behind a token floor and a minimum turn gap.
+- Added `npm run bench:replay`, a deterministic replay harness that bills tool-output cap and image TTL changes against a simulated prefix cache.

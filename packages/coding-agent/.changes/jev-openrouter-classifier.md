@@ -1,0 +1,4 @@
+- Added an opt-in OpenRouter-backed Jev classifier that queries the TypeSafe Jev decisions model for loop-state routing, falling back to the main model on any missing key, timeout, or malformed response.
+- Added a pre-turn router that re-runs the previous tool call when Jev selects `retry_last`, enabled with `PRIME_AGENT_JEV_ENABLED=1`.
+- Added the task goal, deterministic error category, last tool result, and last assistant text to the router state, plus sharper retry criteria and an interactive-mode notice when a reflex bypasses the provider.
+- Added an opt-in Jev termination gate that asks a binary stop/continue question and ends a run only when the model reports the objective satisfied, enabled with `PRIME_AGENT_JEV_STOP=1` alongside `PRIME_AGENT_JEV_ENABLED=1`.

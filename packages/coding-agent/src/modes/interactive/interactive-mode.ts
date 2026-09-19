@@ -6182,6 +6182,19 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "reflex": {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(
+					new Text(
+						theme.fg("muted", `Reflex: ${event.toolName} (provider bypassed, turn ${event.turnIndex})`),
+						1,
+						0,
+					),
+				);
+				this.ui.requestRender();
+				break;
+			}
+
 			case "turn_end":
 				mergeTurnFileChanges(this.agentRunFileChanges, event.message, event.toolResults, this.getCurrentCwd());
 				break;

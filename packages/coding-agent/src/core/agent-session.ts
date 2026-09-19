@@ -12,6 +12,7 @@ import {
 	type AgentState,
 	type AgentTool,
 	type GetContinuationMessagesContext,
+	type JevState,
 	type ShouldStopAfterTurnContext,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
@@ -114,6 +115,9 @@ import {
 	serializeConversation,
 	shouldCompact,
 } from "./compaction/index.js";
+import { type ResolvedContextBudget, resolveContextBudget } from "./context-budget.js";
+import { planContextJanitor } from "./context-janitor.js";
+import { type ContextStatsAccumulator, createContextStatsAccumulator, logContextStats } from "./context-stats.js";
 import {
 	type ContextTreeNode,
 	type ContextWindowResolver,
@@ -171,6 +175,21 @@ import {
 	validateGoalBudget,
 	validateGoalObjective,
 } from "./goals.js";
+import { planImageEviction } from "./image-ttl.js";
+import { OPENROUTER_JEV_PROVIDER_ID } from "./jev-openrouter.js";
+import {
+	buildJevState,
+	createJevPreTurnRouter,
+	createJevStopGate,
+	isJevRouterEnabled,
+	isJevStopEnabled,
+} from "./jev-router.js";
+import {
+	assertDelegationAllowed,
+	createJevSpawnGate,
+	isJevSpawnGateEnabled,
+	type JevSpawnGate,
+} from "./jev-spawn-gate.js";
 import type { HostRequestHandlers, KernelSentAgentMessage } from "./kernel/index.js";
 import { type RestoreResult, snapshotPathIn } from "./kernel/state-snapshot.js";
 import type { AcpMcpServerConfig } from "./mcp/acp-mcp-types.js";
@@ -338,6 +357,7 @@ import {
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 import { THINKING_LEVELS } from "./thinking-levels.js";
+import { capToolOutput, createScratchpadWriter } from "./tool-output-cap.js";
 import { acpMcpToolNames, createAcpMcpToolDefinitions } from "./tools/acp-mcp.js";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
@@ -995,12 +1015,21 @@ type GoalSlashCommand =
 
 type AutonomousSlashCommand = { kind: "status" } | { kind: "on"; config?: AgentAutonomousConfig } | { kind: "off" };
 
+import {
+	RLM_CHILD_ORPHAN_TIMEOUT_PREFIX,
+	RlmChildIdleDeadline,
+	resolveRlmChildIdleTimeoutMs,
+} from "./rlm-child-deadline.js";
 import type { RlmMaxDepthSource, RlmMaxDepthStatus, SetRlmMaxDepthResult } from "./rlm-max-depth.js";
 
 export type { RlmMaxDepthSource, RlmMaxDepthStatus, SetRlmMaxDepthResult } from "./rlm-max-depth.js";
 
 interface PersistedRlmMaxDepthState {
 	maxDepth: number;
+}
+
+interface PersistedContextJanitorState {
+	lastPruneTurn: number;
 }
 
 type AutonomousRuntimeSnapshot = Pick<
@@ -1033,6 +1062,8 @@ interface RlmChildRun {
 	 * sleep freezing the whole session) do not inflate it.
 	 */
 	lastActivityMonotonicAt?: number;
+	/** Opt-in dead-man's switch; absent when the idle timeout is disabled. */
+	idleDeadline?: RlmChildIdleDeadline;
 	error?: string;
 	abort: () => void;
 	publication: AgentMessageDeferred;
@@ -1075,6 +1106,7 @@ interface RlmSubagentModelSelection {
 
 const KERNEL_STATE_LISTING_TIMEOUT_MS = 5000;
 const RLM_MAX_DEPTH_STATE_CUSTOM_TYPE = "rlm_max_depth_state";
+const CONTEXT_JANITOR_STATE_CUSTOM_TYPE = "context_janitor_state";
 /** Minimum spacing between accepted progress notes from one child session. */
 const RLM_PROGRESS_NOTE_MIN_INTERVAL_MS = 10_000;
 /** Bounded ring of progress notes kept per child run; the snapshot exposes the newest. */
@@ -1119,6 +1151,14 @@ function isPersistedRlmMaxDepthState(value: unknown): value is PersistedRlmMaxDe
 	return (
 		typeof value === "object" && value !== null && isNonNegativeInteger((value as PersistedRlmMaxDepthState).maxDepth)
 	);
+}
+
+function isPersistedContextJanitorState(value: unknown): value is PersistedContextJanitorState {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const lastPruneTurn = (value as PersistedContextJanitorState).lastPruneTurn;
+	return typeof lastPruneTurn === "number" && Number.isFinite(lastPruneTurn);
 }
 
 function parseGoalBudgetValue(value: string): number {
@@ -1278,6 +1318,7 @@ export function rlmChildLabel(prompt: string): string {
 function touchRlmChildActivity(run: RlmChildRun): void {
 	run.lastActivityAt = Date.now();
 	run.lastActivityMonotonicAt = performance.now();
+	run.idleDeadline?.kick(run.activity);
 }
 
 /**
@@ -1533,6 +1574,11 @@ export class AgentSession {
 	private readonly _configuredRlmMaxDepth: number | undefined;
 	private _rlmMaxDepth: number;
 	private _rlmMaxDepthSource: RlmMaxDepthSource;
+	private _resolvedContextBudget?: ResolvedContextBudget;
+	private readonly _contextStats: ContextStatsAccumulator = createContextStatsAccumulator();
+	private _contextJanitorTurn = 0;
+	/** Undefined until the persisted watermark is read from the branch. */
+	private _contextJanitorLastPruneTurn?: number;
 	private _rlmSessionDir?: string;
 	private readonly _semanticEdges: SemanticEdgeRecorder;
 	private _rlmParentNodeId?: string;
@@ -1597,6 +1643,8 @@ export class AgentSession {
 	private _queuedGoalThresholdContinuation: AgentMessage | undefined;
 	private _pendingAutoRefineReview: { reason: AutoRefineReason; review: AutoRefineReview } | undefined;
 	private _autoRefineBranchVersion = 0;
+	private _jevStopGate?: (state: JevState) => Promise<boolean>;
+	private _jevSpawnGate?: JevSpawnGate;
 	private _autoRefineReviewAbort?: AbortController;
 	private _refineAbortController?: AbortController;
 	private readonly _autoRefineReviewer?: AutoRefineReviewer;
@@ -1689,6 +1737,7 @@ export class AgentSession {
 
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installContextBudgetHooks();
 		this._installAgentTurnHook();
 		this._installAgentContinuationHook();
 
@@ -1873,30 +1922,150 @@ export class AgentSession {
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+			let content = result.content;
+			let details = result.details;
+			let nextIsError = isError;
+			let overridden = false;
+
+			if (runner.hasHandlers("tool_result")) {
+				const hookResult = await runner.emitToolResult({
+					type: "tool_result",
+					toolName: toolCall.name,
+					toolCallId: toolCall.id,
+					input: args as Record<string, unknown>,
+					content: result.content,
+					details: result.details,
+					isError,
+				});
+				if (hookResult) {
+					content = hookResult.content ?? result.content;
+					details = hookResult.details ?? result.details;
+					nextIsError = hookResult.isError ?? isError;
+					overridden = true;
+				}
 			}
 
-			const hookResult = await runner.emitToolResult({
-				type: "tool_result",
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				input: args as Record<string, unknown>,
-				content: result.content,
-				details: result.details,
-				isError,
-			});
-
-			if (!hookResult) {
-				return undefined;
+			const budget = this._getContextBudget();
+			if (budget.toolOutputCap.enabled) {
+				const scratchDir = this.sessionManager.getSessionArtifactDir();
+				if (scratchDir) {
+					const existingFullOutputPath =
+						typeof details === "object" && details !== null && "fullOutputPath" in details
+							? (details as { fullOutputPath?: string }).fullOutputPath
+							: undefined;
+					const capped = capToolOutput({
+						content,
+						existingFullOutputPath,
+						options: budget.toolOutputCap.options,
+						writeScratchpad: createScratchpadWriter({ dir: join(scratchDir, "scratch") }),
+					});
+					this._contextStats.observeToolResult(capped.content, capped.capped);
+					if (capped.capped) {
+						return { content: capped.content, details, isError: nextIsError };
+					}
+				}
+			} else {
+				this._contextStats.observeToolResult(content, false);
 			}
 
-			return {
-				content: hookResult.content,
-				details: hookResult.details,
-				isError: hookResult.isError ?? isError,
-			};
+			if (overridden) {
+				return { content, details, isError: nextIsError };
+			}
+			return undefined;
 		};
+
+		if (this._rlmDepth === 0 && isJevRouterEnabled()) {
+			this.agent.preTurnRouter = createJevPreTurnRouter({
+				resolveApiKey: () => this._modelRegistry.authStorage.getApiKey(OPENROUTER_JEV_PROVIDER_ID),
+			});
+		}
+		if (this._rlmDepth === 0 && isJevStopEnabled()) {
+			this._jevStopGate = createJevStopGate({
+				resolveApiKey: () => this._modelRegistry.authStorage.getApiKey(OPENROUTER_JEV_PROVIDER_ID),
+			});
+		}
+	}
+
+	private _getContextBudget(): ResolvedContextBudget {
+		if (!this._resolvedContextBudget) {
+			this._resolvedContextBudget = resolveContextBudget(this.settingsManager.getContextBudgetSettings());
+		}
+		return this._resolvedContextBudget;
+	}
+
+	private _installContextBudgetHooks(): void {
+		const inner = this.agent.transformContext;
+		if (!inner) {
+			return;
+		}
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = await inner(messages, signal);
+			const budget = this._getContextBudget();
+			let next = transformed;
+			if (budget.imageTtl.enabled) {
+				const plan = planImageEviction(next, budget.imageTtl.options);
+				if (plan.evicted) {
+					this._contextStats.observeEviction(plan.evictedImages);
+					next = plan.messages;
+				}
+			}
+			if (budget.contextJanitor.enabled) {
+				next = this._applyContextJanitor(next, budget.contextJanitor);
+			}
+			return next;
+		};
+	}
+
+	/**
+	 * Prunes once per phase transition. The turn clock advances on every provider
+	 * view so the minimum turn gap is measured in real turns, and the watermark is
+	 * persisted so a resumed session does not prune again immediately.
+	 */
+	private _applyContextJanitor(
+		messages: AgentMessage[],
+		config: { minTokens: number; minTurns: number },
+	): AgentMessage[] {
+		this._contextJanitorTurn += 1;
+		const plan = planContextJanitor(messages, {
+			minTokens: config.minTokens,
+			minTurns: config.minTurns,
+			turnIndex: this._contextJanitorTurn,
+			lastPruneTurn: this._contextJanitorPruneTurn(),
+		});
+		if (!plan.changed) {
+			return messages;
+		}
+		this._contextStats.observeJanitor(plan.messagesCompressed);
+		this._persistContextJanitorPruneTurn(this._contextJanitorTurn);
+		return plan.messages;
+	}
+
+	private _contextJanitorPruneTurn(): number {
+		if (this._contextJanitorLastPruneTurn === undefined) {
+			this._contextJanitorLastPruneTurn = Number.NEGATIVE_INFINITY;
+			const branch = this.sessionManager.getBranch();
+			for (let i = branch.length - 1; i >= 0; i--) {
+				const entry = branch[i];
+				if (
+					entry.type === "custom" &&
+					entry.customType === CONTEXT_JANITOR_STATE_CUSTOM_TYPE &&
+					isPersistedContextJanitorState(entry.data)
+				) {
+					this._contextJanitorLastPruneTurn = entry.data.lastPruneTurn;
+					break;
+				}
+			}
+		}
+		return this._contextJanitorLastPruneTurn;
+	}
+
+	private _persistContextJanitorPruneTurn(lastPruneTurn: number): void {
+		this._contextJanitorLastPruneTurn = lastPruneTurn;
+		try {
+			this.sessionManager.appendCustomEntry(CONTEXT_JANITOR_STATE_CUSTOM_TYPE, { lastPruneTurn });
+		} catch {
+			// Best-effort: the in-memory watermark still bounds churn this session.
+		}
 	}
 
 	private _installAgentContinuationHook(): void {
@@ -2964,7 +3133,27 @@ export class AgentSession {
 		}
 		// Steering stops continuation only after mandatory serialized checkpoints.
 		// Returning true here still prevents the agent loop from starting another turn.
-		return this._steeringStopPending;
+		if (this._steeringStopPending) {
+			return true;
+		}
+		return this._shouldJevStopAfterTurn(context);
+	}
+
+	/**
+	 * Jev termination checkpoint: after a turn that executed tools, ask the
+	 * classifier whether the objective is complete. Queued steering, queued
+	 * user messages, and turns with no tool calls are never truncated.
+	 */
+	private async _shouldJevStopAfterTurn(context: ShouldStopAfterTurnContext): Promise<boolean> {
+		const gate = this._jevStopGate;
+		if (!gate || context.toolResults.length === 0 || this.agent.hasQueuedMessages()) {
+			return false;
+		}
+		try {
+			return await gate(buildJevState(context.context.messages, context.context.messages.length));
+		} catch {
+			return false;
+		}
 	}
 
 	private async _shouldStopForThresholdCompaction(context: ShouldStopAfterTurnContext): Promise<boolean> {
@@ -4510,6 +4699,16 @@ export class AgentSession {
 				toolResults: event.toolResults,
 			};
 			await this._extensionRunner.emit(extensionEvent);
+			if (event.message.role === "assistant") {
+				logContextStats(
+					this._contextStats.snapshot({
+						turnIndex: this._turnIndex,
+						usage: event.message.usage,
+						messages: this.agent.state.messages,
+					}),
+				);
+				this._contextStats.reset();
+			}
 			this._turnIndex++;
 		} else if (event.type === "message_start") {
 			const extensionEvent: MessageStartEvent = {
@@ -11941,6 +12140,14 @@ export class AgentSession {
 				`RLM recursion depth limit reached (RLM_DEPTH=${this._rlmDepth}, RLM_MAX_DEPTH=${this._rlmMaxDepth})`,
 			);
 		}
+		if (isJevSpawnGateEnabled()) {
+			if (!this._jevSpawnGate) {
+				this._jevSpawnGate = createJevSpawnGate({
+					resolveApiKey: () => this._modelRegistry.authStorage.getApiKey(OPENROUTER_JEV_PROVIDER_ID),
+				});
+			}
+			assertDelegationAllowed(await this._jevSpawnGate(buildJevState(this.agent.state.messages, 0).goal, prompt));
+		}
 		if (requestedSessionName) {
 			if (this._pendingRlmSubagentSessionNames.has(requestedSessionName)) {
 				throw new Error(formatAgentSessionNameUnavailable(requestedSessionName, this._rlmDepth + 1));
@@ -12095,6 +12302,19 @@ export class AgentSession {
 		run.emitUpdate = emitChildUpdate;
 		emitChildUpdate();
 
+		const idleTimeoutMs = resolveRlmChildIdleTimeoutMs();
+		if (idleTimeoutMs > 0) {
+			run.idleDeadline = new RlmChildIdleDeadline({
+				timeoutMs: idleTimeoutMs,
+				onTimeout: () => {
+					run.error = `${RLM_CHILD_ORPHAN_TIMEOUT_PREFIX}: child ${run.id} had no tracked activity for ${idleTimeoutMs}ms`;
+					run.emitUpdate?.();
+					run.abort();
+				},
+			});
+			run.idleDeadline.kick(run.activity);
+		}
+
 		const publishChildSession = (child: AgentSession) => {
 			childSession = child;
 			if (this._activeRlmChildRuns.get(run.id) !== run) return;
@@ -12102,8 +12322,9 @@ export class AgentSession {
 			run.abort = () => void child.abort();
 			run.publication.resolve();
 			// Cancellation may have been admitted while runtime construction was
-			// blocked and run.abort was still a no-op.
-			if (run.status === "cancelled") run.abort();
+			// blocked and run.abort was still a no-op, and the idle deadline may
+			// have fired before publication.
+			if (run.status === "cancelled" || run.idleDeadline?.fired) run.abort();
 		};
 		const subagentOptions: CreateRlmSubagentRuntimeOptions = {
 			...this._createRlmSubagentRuntimeOptions({
@@ -12321,7 +12542,7 @@ export class AgentSession {
 				run.publication.reject(runError);
 				if (run.status !== "cancelled") {
 					run.status = "error";
-					run.error = runError.message;
+					run.error = run.error ?? runError.message;
 				}
 				// A failed child still returns an error outcome the parent consumes;
 				// cancelled runs and zero-commit children return nothing.
@@ -12391,6 +12612,7 @@ export class AgentSession {
 					}
 				}
 			} finally {
+				run.idleDeadline?.dispose();
 				flushPendingChildUsageAttribution();
 				if (run.detachedDeletion) {
 					run.deletionRunFinished = true;

@@ -19,6 +19,7 @@
 		"check:installer": "node scripts/check-installer.mjs",
 		"check:push-guard": "node scripts/check-push-guard.mjs",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
+		"bench:replay": "npx tsx benchmarks/run-replay.ts",
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
 		"test": "npm run test --workspaces --if-present",

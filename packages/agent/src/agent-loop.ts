@@ -20,12 +20,15 @@ import type {
 	AgentTool,
 	AgentToolCall,
 	AgentToolResult,
+	PreTurnReflex,
 	StreamFn,
 } from "./types.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
 const ABORT_ERROR_MESSAGE = "Request was aborted";
+/** Default ceiling on consecutive reflex turns before a provider turn is forced. */
+export const DEFAULT_MAX_CONSECUTIVE_REFLEXES = 3;
 const EMPTY_USAGE: AssistantMessage["usage"] = {
 	input: 0,
 	output: 0,
@@ -301,6 +304,51 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 	);
 }
 
+/**
+ * Builds the assistant message a reflex turn would have come from, so the
+ * transcript records the bypass exactly like a model-authored tool call.
+ */
+function createReflexAssistantMessage(config: AgentLoopConfig, reflex: PreTurnReflex): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{
+				type: "toolCall",
+				id: `reflex-${globalThis.crypto.randomUUID()}`,
+				name: reflex.toolName,
+				arguments: reflex.arguments ?? {},
+			},
+		],
+		api: config.model.api,
+		provider: config.model.provider,
+		model: config.model.id,
+		usage: cloneUsage(EMPTY_USAGE),
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+}
+
+async function resolvePreTurnReflex(
+	config: AgentLoopConfig,
+	context: AgentContext,
+	turnIndex: number,
+	consecutiveReflexes: number,
+	signal: AbortSignal | undefined,
+): Promise<PreTurnReflex | undefined> {
+	if (!config.preTurnRouter) {
+		return undefined;
+	}
+	try {
+		const reflex = await maybePromiseWithAbort(
+			config.preTurnRouter({ turnIndex, consecutiveReflexes, context }),
+			signal,
+		);
+		return reflex ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function runLoop(
 	currentContext: AgentContext,
 	newMessages: AgentMessage[],
@@ -311,6 +359,9 @@ async function runLoop(
 ): Promise<void> {
 	let firstTurn = true;
 	let lastTurn: Parameters<NonNullable<AgentLoopConfig["getContinuationMessages"]>>[0] | undefined;
+	let turnIndex = 0;
+	let consecutiveReflexes = 0;
+	const maxConsecutiveReflexes = config.maxConsecutiveReflexes ?? DEFAULT_MAX_CONSECUTIVE_REFLEXES;
 	let pendingMessages: AgentMessage[] = await pollMessagesUnlessAborted(config.getSteeringMessages, signal);
 
 	const shouldStopBeforeTurn = (): boolean => !firstTurn && (config.shouldStopBeforeTurn?.() ?? false);
@@ -321,6 +372,45 @@ async function runLoop(
 
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
 			throwIfAborted(signal);
+
+			const reflex =
+				pendingMessages.length === 0 && consecutiveReflexes < maxConsecutiveReflexes
+					? await resolvePreTurnReflex(config, currentContext, turnIndex, consecutiveReflexes, signal)
+					: undefined;
+			if (reflex) {
+				consecutiveReflexes += 1;
+				await emit({
+					type: "reflex",
+					toolName: reflex.toolName,
+					turnIndex,
+					consecutiveReflexes,
+				});
+				if (!firstTurn) {
+					await emit({ type: "turn_start" });
+				} else {
+					firstTurn = false;
+				}
+				const reflexMessage = createReflexAssistantMessage(config, reflex);
+				await emit({ type: "message_start", message: reflexMessage });
+				await emit({ type: "message_end", message: reflexMessage });
+				currentContext.messages.push(reflexMessage);
+				newMessages.push(reflexMessage);
+
+				const reflexBatch = await executeToolCalls(currentContext, reflexMessage, config, signal, emit);
+				for (const result of reflexBatch.messages) {
+					currentContext.messages.push(result);
+					newMessages.push(result);
+				}
+				await emit({ type: "turn_end", message: reflexMessage, toolResults: reflexBatch.messages });
+				turnIndex += 1;
+				if (signal?.aborted) {
+					await emit({ type: "agent_end", messages: newMessages });
+					return;
+				}
+				hasMoreToolCalls = !reflexBatch.terminate;
+				continue;
+			}
+
 			if (!firstTurn) {
 				await emit({ type: "turn_start" });
 			} else {
@@ -338,6 +428,8 @@ async function runLoop(
 			}
 
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
+			consecutiveReflexes = 0;
+			turnIndex += 1;
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
