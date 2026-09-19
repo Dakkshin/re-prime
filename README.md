@@ -1,10 +1,13 @@
-# re-prime
+<h1 align="center">re-prime</h1>
 
-**A zero-bloat execution engine for long-running RLM agents.**
+<p align="center">
+  <strong>A zero-bloat execution engine for long-running RLM agents.</strong><br/>
+  Fork of <a href="https://github.com/PrimeIntellect-ai/prime-agent">Prime Agent</a> by <a href="https://primeintellect.ai">Prime Intellect</a> &bull; built on <a href="https://github.com/earendil-works/pi">pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
+</p>
 
-re-prime is a derivative of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) (base commit `976ea10`). It keeps the upstream agent intact and adds deterministic cost measurement plus opt-in execution controls, so long autonomous runs can be measured, bounded, and audited instead of guessed at.
+re-prime keeps the upstream agent intact and adds deterministic cost measurement plus opt-in execution controls, so long autonomous runs can be measured, bounded, and audited instead of guessed at. It is an independent derivative, not an official Prime Intellect release.
 
-> Based on Prime Agent — MIT License, Copyright (c) 2025 Mario Zechner. Upstream is maintained by Prime Intellect and its contributors. This repository is an independent derivative, not an official Prime Intellect release.
+Base: `prime-agent@976ea10`.
 
 ## What re-prime adds
 
@@ -71,11 +74,14 @@ This repository is an independent derivative. Issues and pull requests about the
 
 ## Acknowledgements
 
-The agent and TUI are built on [`pi`](https://github.com/earendil-works/pi), and this project would not exist without the upstream Prime Agent authors. We thank both.
+re-prime is a fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by Prime Intellect and its authors (see [Citation](#citation)) — the agent, the harness, and the long-running-work design are theirs. The agent and TUI are in turn built on [`pi`](https://github.com/earendil-works/pi) by [Mario Zechner](https://github.com/mariozechner). We thank both.
 
 ## License
 
-MIT. The original copyright notice (Copyright (c) 2025 Mario Zechner) is retained in [LICENSE](LICENSE).
+re-prime is released under the [MIT License](LICENSE). The original copyright notice is retained.
+
+© 2025 Mario Zechner<br/>
+© 2026 Dakkshin
 
 ## Citation
 
