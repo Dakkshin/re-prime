@@ -177,6 +177,18 @@ export function assaultCubeTrace(): Workload {
 	return { ...workload, name: "assaultcube" };
 }
 
+/**
+ * A real recorded Prime Agent session (the AssaultCube build), converted from a
+ * v3 session JSONL by `benchmarks/lib/convert-session.ts` and redacted. Unlike
+ * the synthetic archetypes, its tool outputs are many small results rather than
+ * a few multi-hundred-line dumps, so the byte cap does not fire.
+ */
+export function recordedSessionTrace(): Workload {
+	const path = fileURLToPath(new URL("../fixtures/recorded-session-trace.jsonl", import.meta.url));
+	const workload = loadTrace(path);
+	return { ...workload, name: "recorded" };
+}
+
 export interface HeavyToolRunOptions {
 	/** Extra plain read turns appended after the payload turns (amortizes one-time transforms). */
 	extraTurns?: number;
@@ -239,9 +251,10 @@ export function loadWorkload(name: string): Workload {
 	if (name === "heavy") return heavyToolRun();
 	if (name === "heavy-long") return heavyToolRun({ extraTurns: 12 });
 	if (name === "assaultcube") return assaultCubeTrace();
+	if (name === "recorded") return recordedSessionTrace();
 	return loadTrace(resolve(name));
 }
 
 export function listWorkloads(): string[] {
-	return ["assaultcube", "heavy", "heavy-long"];
+	return ["assaultcube", "recorded", "heavy", "heavy-long"];
 }

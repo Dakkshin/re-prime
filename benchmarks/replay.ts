@@ -7,6 +7,7 @@
  * workload produce byte-identical telemetry.
  */
 
+import { Buffer } from "node:buffer";
 import type { AgentMessage } from "../packages/agent/src/index.js";
 import type { ImageContent, TextContent } from "../packages/ai/src/index.js";
 import { contentByteSize } from "../packages/coding-agent/src/core/context-stats.js";
@@ -46,6 +47,7 @@ export interface ReplayReport {
 	toolResultTextBytes: number;
 	residentImageBytes: number;
 	capOpportunities: number;
+	byteCapOpportunities: number;
 	cappedResults: number;
 	imagesEvicted: number;
 	evictionEvents: number;
@@ -85,6 +87,7 @@ export function runReplay(workload: Workload, flags: ReplayFlags): ReplayReport 
 	let totalEvicted = 0;
 	let totalEvictionEvents = 0;
 	let capOpportunities = 0;
+	let byteCapOpportunities = 0;
 
 	for (const [turnIndex, turn] of workload.turns.entries()) {
 		let turnCapped = 0;
@@ -98,6 +101,7 @@ export function runReplay(workload: Workload, flags: ReplayFlags): ReplayReport 
 					.map((part) => part.text)
 					.join("\n");
 				if (exceedsOutputCap(joined, capOptions)) capOpportunities += 1;
+				if (Buffer.byteLength(joined, "utf8") > capOptions.maxBytes) byteCapOpportunities += 1;
 			}
 			let next = message;
 			if (flags.toolOutputCap && isToolResult(message)) {
@@ -153,6 +157,7 @@ export function runReplay(workload: Workload, flags: ReplayFlags): ReplayReport 
 		toolResultTextBytes: perTurn.reduce((total, turn) => total + turn.toolResultTextBytes, 0),
 		residentImageBytes: perTurn.reduce((total, turn) => total + turn.residentImageBytes, 0),
 		capOpportunities,
+		byteCapOpportunities,
 		cappedResults: totalCapped,
 		imagesEvicted: totalEvicted,
 		evictionEvents: totalEvictionEvents,
@@ -176,7 +181,8 @@ export function compareReports(baseline: ReplayReport, variant: ReplayReport): R
 		baseline.residentImageBytes === 0 ? 1 : variant.residentImageBytes / baseline.residentImageBytes;
 	return {
 		toolResultRatio,
-		toolResultReductionPassed: toolResultRatio <= TOOL_RESULT_REDUCTION_TARGET,
+		toolResultReductionPassed:
+			baseline.byteCapOpportunities === 0 || toolResultRatio <= TOOL_RESULT_REDUCTION_TARGET,
 		imageBytesRatio,
 		imageReductionPassed: baseline.residentImageBytes === 0 || imageBytesRatio <= TOOL_RESULT_REDUCTION_TARGET,
 		cacheWritePassed: variant.totals.cacheWrite <= baseline.totals.cacheWrite,

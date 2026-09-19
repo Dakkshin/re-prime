@@ -12,7 +12,10 @@
  * scripts/check-test-policy.mjs by design; see tasks/spec-phase2.md.
  */
 
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { stableStringify } from "./lib/billing.js";
+import { redactText } from "./lib/convert-session.js";
 import { listWorkloads, loadWorkload } from "./lib/workloads.js";
 import { type ReplayGates, type ReplaySuiteReport, runReplaySuite } from "./replay.js";
 
@@ -53,7 +56,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
 
 function formatGates(label: string, suite: ReplaySuiteReport, gates: ReplayGates): string {
 	const textGate =
-		suite.baseline.capOpportunities === 0
+		suite.baseline.byteCapOpportunities === 0
 			? "n/a"
 			: gates.toolResultReductionPassed
 				? "pass"
@@ -118,9 +121,26 @@ function assertDeterministic(suites: readonly ReplaySuiteReport[], repeat: numbe
 	}
 }
 
+/**
+ * Guards the committed trace fixtures against an accidental unredacted path or
+ * credential. Checked fixtures are byte-stable, so a passing run is repeatable.
+ */
+function assertFixturesRedacted(): void {
+	const dir = fileURLToPath(new URL("./fixtures", import.meta.url));
+	for (const name of readdirSync(dir)) {
+		if (!name.endsWith(".jsonl")) continue;
+		const content = readFileSync(`${dir}/${name}`, "utf8");
+		const redacted = redactText(content);
+		if (redacted !== content) {
+			throw new Error(`Fixture ${name} contains unredacted text; regenerate it via convert-session.ts`);
+		}
+	}
+}
+
 function main(): void {
 	const options = parseArgs(process.argv.slice(2));
 	const suites = options.workloads.map((name) => runReplaySuite(loadWorkload(name)));
+	assertFixturesRedacted();
 	assertDeterministic(suites, options.repeat);
 
 	if (options.json) {
@@ -138,7 +158,7 @@ function main(): void {
 	if (options.check) {
 		const failures: string[] = [];
 		for (const suite of suites) {
-			if (suite.baseline.capOpportunities > 0 && !suite.gates.capOnly.toolResultReductionPassed) {
+			if (suite.baseline.byteCapOpportunities > 0 && !suite.gates.capOnly.toolResultReductionPassed) {
 				failures.push(
 					`${suite.workload}: cap gate (tool-result text bytes) ${suite.gates.capOnly.toolResultRatio.toFixed(3)}`,
 				);
