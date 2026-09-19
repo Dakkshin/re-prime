@@ -5,6 +5,11 @@ import { estimateTokens } from "./compaction/index.js";
 export interface ImageTtlOptions {
 	/** Turns an image may stay resident before it is evicted. 0 disables eviction. */
 	ttlTurns: number;
+	/**
+	 * Turns of recovered tokens allowed to repay a prefix break. Overrides
+	 * `IMAGE_TTL_PAYBACK_TURNS` for one call; omitted uses the constant.
+	 */
+	paybackTurns?: number;
 }
 
 /**
@@ -125,10 +130,7 @@ export const IMAGE_TTL_PAYBACK_TURNS = 2;
  * `recoveredTokens * paybackTurns >= breakTokens`; otherwise the image stays
  * resident and the decision is revisited next turn.
  */
-export function planImageEviction(
-	messages: readonly AgentMessage[],
-	options: ImageTtlOptions & { paybackTurns?: number },
-): ImageEvictionPlan {
+export function planImageEviction(messages: readonly AgentMessage[], options: ImageTtlOptions): ImageEvictionPlan {
 	const view = evictStaleImages(messages, options);
 	if (view === messages) {
 		return {

@@ -16,6 +16,7 @@
  * Between transitions the transform is a pure passthrough.
  */
 
+import { Buffer } from "node:buffer";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { classifyJevError } from "@earendil-works/pi-agent-core";
 import type { TextContent } from "@earendil-works/pi-ai";
@@ -26,6 +27,7 @@ export const CONTEXT_JANITOR_DEFAULTS = {
 	minTurns: 15,
 	minFailures: 2,
 	activeWindowTurns: 6,
+	successDumpMinBytes: 8_192,
 } as const;
 
 export interface ContextJanitorOptions {
@@ -41,12 +43,18 @@ export interface ContextJanitorOptions {
 	minFailures?: number;
 	/** Trailing assistant turns kept verbatim. */
 	activeWindowTurns?: number;
+	/**
+	 * Successful tool results at least this many bytes may be tombstoned when a
+	 * later identical call succeeds. 0 disables the successful-dump pass.
+	 */
+	successDumpMinBytes?: number;
 }
 
 export interface ContextJanitorPlan {
 	messages: AgentMessage[];
 	changed: boolean;
 	trajectoriesCompressed: number;
+	successDumpsCompressed: number;
 	messagesCompressed: number;
 	estimatedTokensBefore: number;
 	estimatedTokensAfter: number;
@@ -119,6 +127,30 @@ function replaceToolResultContent(message: AgentMessage, text: string): AgentMes
 	return { ...message, content: [{ type: "text", text }] } as AgentMessage;
 }
 
+function messageTextBytes(message: AgentMessage): number {
+	return Buffer.byteLength(textOf(message), "utf8");
+}
+
+function callSignature(name: string, args: unknown): string {
+	return `${name}:${JSON.stringify(args ?? {})}`;
+}
+
+/** Call signature per assistant tool-call id, so a re-run is detectable. */
+function callSignaturesById(messages: readonly AgentMessage[]): Map<string, string> {
+	const signatures = new Map<string, string>();
+	for (const message of messages) {
+		if (message.role !== "assistant") continue;
+		for (const part of message.content) {
+			if (part.type === "toolCall") signatures.set(part.id, callSignature(part.name, part.arguments));
+		}
+	}
+	return signatures;
+}
+
+function successDumpTombstone(toolName: string, bytes: number): string {
+	return `[Historical execution compressed: superseded successful ${toolName} output (${bytes} bytes); a later identical call succeeded, prior output omitted.]`;
+}
+
 /**
  * Plans a phase-transition prune. Pure: the input array and its messages are
  * never mutated, and the original array is returned unchanged when the gate is
@@ -132,6 +164,7 @@ export function planContextJanitor(
 		messages: messages as AgentMessage[],
 		changed: false,
 		trajectoriesCompressed: 0,
+		successDumpsCompressed: 0,
 		messagesCompressed: 0,
 		estimatedTokensBefore: 0,
 		estimatedTokensAfter: 0,
@@ -196,6 +229,34 @@ export function planContextJanitor(
 	}
 	closeRun(boundary);
 
+	// Superseded successful dumps: a large successful result whose exact call was
+	// re-run successfully later is obsolete, so the older copy becomes a
+	// tombstone. Superseded by an exact re-run only, which keeps the rule
+	// deterministic and conservative.
+	const successMinBytes = options.successDumpMinBytes ?? CONTEXT_JANITOR_DEFAULTS.successDumpMinBytes;
+	let successDumpsCompressed = 0;
+	if (successMinBytes > 0) {
+		const signatures = callSignaturesById(messages);
+		for (let index = 0; index < boundary; index += 1) {
+			const message = messages[index];
+			if (message.role !== "toolResult" || message.isError !== false || replacements.has(index)) continue;
+			const bytes = messageTextBytes(message);
+			if (bytes < successMinBytes) continue;
+			const signature = signatures.get(message.toolCallId);
+			if (!signature) continue;
+			const superseded = messages.some(
+				(later, laterIndex) =>
+					laterIndex > index &&
+					later.role === "toolResult" &&
+					later.isError === false &&
+					signatures.get(later.toolCallId) === signature,
+			);
+			if (!superseded) continue;
+			replacements.set(index, successDumpTombstone((message as { toolName?: string }).toolName ?? "tool", bytes));
+			successDumpsCompressed += 1;
+		}
+	}
+
 	if (replacements.size === 0) {
 		return { ...empty, estimatedTokensBefore };
 	}
@@ -215,6 +276,7 @@ export function planContextJanitor(
 		messages: output,
 		changed: true,
 		trajectoriesCompressed,
+		successDumpsCompressed,
 		messagesCompressed: replacements.size,
 		estimatedTokensBefore,
 		estimatedTokensAfter,

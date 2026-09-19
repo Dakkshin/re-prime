@@ -15,14 +15,17 @@ describe("resolveContextBudget", () => {
 			maxBytes: DEFAULT_TOOL_OUTPUT_CAP.maxBytes,
 			headRatio: DEFAULT_TOOL_OUTPUT_CAP.headRatio,
 		});
-		expect(budget.imageTtl).toEqual({ enabled: false, options: { ttlTurns: DEFAULT_IMAGE_TTL.ttlTurns } });
+		expect(budget.imageTtl).toEqual({
+			enabled: false,
+			options: { ttlTurns: DEFAULT_IMAGE_TTL.ttlTurns, paybackTurns: DEFAULT_IMAGE_TTL.paybackTurns },
+		});
 	});
 
 	it("reads settings", () => {
 		const budget = resolveContextBudget(
 			{
 				toolOutputCap: { enabled: true, maxLines: 40, maxBytes: 1500, headRatio: 0.4 },
-				imageTtl: { enabled: true, ttlTurns: 1 },
+				imageTtl: { enabled: true, ttlTurns: 1, paybackTurns: 4 },
 			},
 			{},
 		);
@@ -30,7 +33,7 @@ describe("resolveContextBudget", () => {
 			enabled: true,
 			options: { maxLines: 40, maxBytes: 1500, headRatio: 0.4 },
 		});
-		expect(budget.imageTtl).toEqual({ enabled: true, options: { ttlTurns: 1 } });
+		expect(budget.imageTtl).toEqual({ enabled: true, options: { ttlTurns: 1, paybackTurns: 4 } });
 	});
 
 	it("lets the environment override settings", () => {
@@ -41,16 +44,20 @@ describe("resolveContextBudget", () => {
 			[CONTEXT_BUDGET_ENV.toolOutputCapHeadRatio]: "0.25",
 			[CONTEXT_BUDGET_ENV.imageTtlEnabled]: "true",
 			[CONTEXT_BUDGET_ENV.imageTtlTurns]: "0",
+			[CONTEXT_BUDGET_ENV.imageTtlPaybackTurns]: "5",
 		};
 		const budget = resolveContextBudget(
-			{ toolOutputCap: { enabled: false, maxLines: 40 }, imageTtl: { enabled: false, ttlTurns: 5 } },
+			{
+				toolOutputCap: { enabled: false, maxLines: 40 },
+				imageTtl: { enabled: false, ttlTurns: 5, paybackTurns: 9 },
+			},
 			env,
 		);
 		expect(budget.toolOutputCap).toEqual({
 			enabled: true,
 			options: { maxLines: 77, maxBytes: 9999, headRatio: 0.25 },
 		});
-		expect(budget.imageTtl).toEqual({ enabled: true, options: { ttlTurns: 0 } });
+		expect(budget.imageTtl).toEqual({ enabled: true, options: { ttlTurns: 0, paybackTurns: 5 } });
 	});
 
 	it.each([
@@ -67,5 +74,10 @@ describe("resolveContextBudget", () => {
 					? budget.toolOutputCap.options.headRatio
 					: budget.imageTtl.options.ttlTurns;
 		expect(actual).toBe(expected);
+	});
+
+	it("falls back on a zero payback window", () => {
+		const budget = resolveContextBudget({}, { [CONTEXT_BUDGET_ENV.imageTtlPaybackTurns]: "0" });
+		expect(budget.imageTtl.options.paybackTurns).toBe(DEFAULT_IMAGE_TTL.paybackTurns);
 	});
 });

@@ -117,7 +117,12 @@ import {
 } from "./compaction/index.js";
 import { type ResolvedContextBudget, resolveContextBudget } from "./context-budget.js";
 import { planContextJanitor } from "./context-janitor.js";
-import { type ContextStatsAccumulator, createContextStatsAccumulator, logContextStats } from "./context-stats.js";
+import {
+	type ContextStatsAccumulator,
+	createContextStatsAccumulator,
+	createContextStatsHistory,
+	logContextStats,
+} from "./context-stats.js";
 import {
 	type ContextTreeNode,
 	type ContextWindowResolver,
@@ -1576,6 +1581,7 @@ export class AgentSession {
 	private _rlmMaxDepthSource: RlmMaxDepthSource;
 	private _resolvedContextBudget?: ResolvedContextBudget;
 	private readonly _contextStats: ContextStatsAccumulator = createContextStatsAccumulator();
+	private readonly _contextStatsHistory = createContextStatsHistory();
 	private _contextJanitorTurn = 0;
 	/** Undefined until the persisted watermark is read from the branch. */
 	private _contextJanitorLastPruneTurn?: number;
@@ -2023,12 +2029,13 @@ export class AgentSession {
 	 */
 	private _applyContextJanitor(
 		messages: AgentMessage[],
-		config: { minTokens: number; minTurns: number },
+		config: { minTokens: number; minTurns: number; successDumpMinBytes: number },
 	): AgentMessage[] {
 		this._contextJanitorTurn += 1;
 		const plan = planContextJanitor(messages, {
 			minTokens: config.minTokens,
 			minTurns: config.minTurns,
+			successDumpMinBytes: config.successDumpMinBytes,
 			turnIndex: this._contextJanitorTurn,
 			lastPruneTurn: this._contextJanitorPruneTurn(),
 		});
@@ -4700,13 +4707,13 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 			if (event.message.role === "assistant") {
-				logContextStats(
-					this._contextStats.snapshot({
-						turnIndex: this._turnIndex,
-						usage: event.message.usage,
-						messages: this.agent.state.messages,
-					}),
-				);
+				const stats = this._contextStats.snapshot({
+					turnIndex: this._turnIndex,
+					usage: event.message.usage,
+					messages: this.agent.state.messages,
+				});
+				logContextStats(stats);
+				this._contextStatsHistory.push(stats);
 				this._contextStats.reset();
 			}
 			this._turnIndex++;
@@ -13977,6 +13984,7 @@ export class AgentSession {
 			ownUsage,
 			totalUsage,
 			contextUsage: this.getContextUsage(),
+			recentStats: this._contextStatsHistory.recent(),
 			children,
 		};
 	}

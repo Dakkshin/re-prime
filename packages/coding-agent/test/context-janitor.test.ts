@@ -37,6 +37,10 @@ function assistantCall(id: string, name: string): AssistantMessage {
 	};
 }
 
+function assistantCallWith(id: string, name: string, args: Record<string, unknown>): AssistantMessage {
+	return { ...assistantCall(id, name), content: [{ type: "toolCall", id, name, arguments: args }] };
+}
+
 function assistantText(text: string): AssistantMessage {
 	return {
 		role: "assistant",
@@ -72,6 +76,20 @@ function supersededFailures(): AgentMessage[] {
 }
 
 const BASE = { minTokens: 1, minTurns: 1, turnIndex: 20, lastPruneTurn: 0, activeWindowTurns: 1 } as const;
+
+const BIG_DUMP = "x".repeat(9_000);
+
+/** A large successful read, then the exact same call re-run successfully. */
+function supersededSuccessDump(): AgentMessage[] {
+	return [
+		user("read the log"),
+		assistantCallWith("s1", "bash", { command: "cat big.log" }),
+		toolResult("s1", "bash", BIG_DUMP, false),
+		assistantCallWith("s2", "bash", { command: "cat big.log" }),
+		toolResult("s2", "bash", "fresh tail only", false),
+		assistantText("Read it again after the rewrite."),
+	];
+}
 
 describe("planContextJanitor", () => {
 	it("stays closed until the minimum turn gap has elapsed", () => {
@@ -129,5 +147,25 @@ describe("planContextJanitor", () => {
 		const second = planContextJanitor(supersededFailures(), BASE);
 		expect(JSON.stringify(first.messages)).toBe(JSON.stringify(second.messages));
 		expect(second.estimatedTokensAfter).toBe(first.estimatedTokensAfter);
+	});
+
+	it("compresses a successful dump that an identical call superseded", () => {
+		const plan = planContextJanitor(supersededSuccessDump(), BASE);
+		expect(plan.changed).toBe(true);
+		expect(plan.successDumpsCompressed).toBe(1);
+		expect(plan.trajectoriesCompressed).toBe(0);
+		const result = plan.messages[2] as ToolResultMessage;
+		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("superseded successful bash output") });
+		expect(result.isError).toBe(false);
+	});
+
+	it("leaves a successful dump that was never re-run alone", () => {
+		const messages = supersededSuccessDump();
+		messages.splice(3, 2);
+		expect(planContextJanitor(messages, BASE).changed).toBe(false);
+	});
+
+	it("disables the successful-dump pass at a zero threshold", () => {
+		expect(planContextJanitor(supersededSuccessDump(), { ...BASE, successDumpMinBytes: 0 }).changed).toBe(false);
 	});
 });

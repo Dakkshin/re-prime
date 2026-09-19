@@ -13,23 +13,30 @@ export interface ContextBudgetSettings {
 	imageTtl?: {
 		enabled?: boolean;
 		ttlTurns?: number;
+		paybackTurns?: number;
 	};
 	contextJanitor?: {
 		enabled?: boolean;
 		minTokens?: number;
 		minTurns?: number;
+		successDumpMinBytes?: number;
 	};
 }
 
 export interface ResolvedContextBudget {
 	toolOutputCap: { enabled: boolean; options: ToolOutputCapOptions };
 	imageTtl: { enabled: boolean; options: ImageTtlOptions };
-	contextJanitor: { enabled: boolean; minTokens: number; minTurns: number };
+	contextJanitor: { enabled: boolean; minTokens: number; minTurns: number; successDumpMinBytes: number };
 }
 
 export const DEFAULT_TOOL_OUTPUT_CAP = { enabled: false, maxLines: 200, maxBytes: 16_384, headRatio: 0.6 } as const;
-export const DEFAULT_IMAGE_TTL = { enabled: false, ttlTurns: 2 } as const;
-export const DEFAULT_CONTEXT_JANITOR = { enabled: false, minTokens: 40_000, minTurns: 15 } as const;
+export const DEFAULT_IMAGE_TTL = { enabled: false, ttlTurns: 2, paybackTurns: 2 } as const;
+export const DEFAULT_CONTEXT_JANITOR = {
+	enabled: false,
+	minTokens: 40_000,
+	minTurns: 15,
+	successDumpMinBytes: 8_192,
+} as const;
 
 export const CONTEXT_BUDGET_ENV = {
 	toolOutputCapEnabled: "PRIME_AGENT_TOOL_OUTPUT_CAP",
@@ -38,9 +45,11 @@ export const CONTEXT_BUDGET_ENV = {
 	toolOutputCapHeadRatio: "PRIME_AGENT_TOOL_OUTPUT_HEAD_RATIO",
 	imageTtlEnabled: "PRIME_AGENT_IMAGE_TTL",
 	imageTtlTurns: "PRIME_AGENT_IMAGE_TTL_TURNS",
+	imageTtlPaybackTurns: "PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS",
 	contextJanitorEnabled: "PRIME_AGENT_CONTEXT_JANITOR",
 	contextJanitorMinTokens: "PRIME_AGENT_CONTEXT_JANITOR_TOKENS",
 	contextJanitorMinTurns: "PRIME_AGENT_CONTEXT_JANITOR_TURNS",
+	contextJanitorSuccessBytes: "PRIME_AGENT_CONTEXT_JANITOR_SUCCESS_BYTES",
 } as const;
 
 const logger = getLogger("context-budget");
@@ -182,6 +191,12 @@ export function resolveContextBudget(
 					settings.imageTtl?.ttlTurns,
 					DEFAULT_IMAGE_TTL.ttlTurns,
 				),
+				paybackTurns: resolvePositiveInt(
+					CONTEXT_BUDGET_ENV.imageTtlPaybackTurns,
+					env,
+					settings.imageTtl?.paybackTurns,
+					DEFAULT_IMAGE_TTL.paybackTurns,
+				),
 			},
 		},
 		contextJanitor: {
@@ -198,6 +213,12 @@ export function resolveContextBudget(
 				env,
 				settings.contextJanitor?.minTurns,
 				DEFAULT_CONTEXT_JANITOR.minTurns,
+			),
+			successDumpMinBytes: resolveNonNegativeInt(
+				CONTEXT_BUDGET_ENV.contextJanitorSuccessBytes,
+				env,
+				settings.contextJanitor?.successDumpMinBytes,
+				DEFAULT_CONTEXT_JANITOR.successDumpMinBytes,
 			),
 		},
 	};
