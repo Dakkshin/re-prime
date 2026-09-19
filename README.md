@@ -1,84 +1,112 @@
 <h1 align="center">re-prime</h1>
 
 <p align="center">
-  <strong>A zero-bloat execution engine for long-running RLM agents.</strong><br/>
-  Fork of <a href="https://github.com/PrimeIntellect-ai/prime-agent">Prime Agent</a> by <a href="https://primeintellect.ai">Prime Intellect</a> &bull; built on <a href="https://github.com/earendil-works/pi">pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
+  <strong>Cost measurement and opt-in execution controls for long-running RLM agents.</strong><br/>
+  Fork of <a href="https://github.com/PrimeIntellect-ai/prime-agent">Prime Agent</a> by <a href="https://primeintellect.ai">Prime Intellect</a>, itself built on <a href="https://github.com/earendil-works/pi">pi</a> by <a href="https://github.com/mariozechner">@mariozechner</a>
 </p>
 
-re-prime keeps the upstream agent intact and adds deterministic cost measurement plus opt-in execution controls, so long autonomous runs can be measured, bounded, and audited instead of guessed at. It is an independent derivative, not an official Prime Intellect release.
+Prime Agent's recursive subagents and persistent REPL are built for work that runs for a long time. That is exactly the workload where a prompt cache quietly becomes a line item. re-prime adds the instrument to measure that cost and four switches to bound it. Base: `prime-agent@976ea10`.
 
-Base: `prime-agent@976ea10`.
+## What this is (and isn't)
 
-## What re-prime adds
+- **Is:** upstream Prime Agent plus a deterministic replay harness and four opt-in controls. Every control ships off.
+- **Isn't:** an official Prime Intellect release, a binary distribution, or a sandbox. There is no installer; you build from source.
+- **Doesn't:** alter flag-off behavior, drop transcript messages, or call a model to rewrite context. Eviction and compression are deterministic and reversible-by-reload.
 
-- **Deterministic replay harness.** `npm run bench:replay` replays synthetic and recorded transcripts through the real context transforms and prices every turn against a simulated SHA-256 prefix cache: `cacheRead`, `cacheWrite`, prefix breaks, tool-result bytes, and resident image bytes. No provider, no clock, no RNG — repeated runs are byte-identical, and `--check` fails the run on a cache-write regression.
-- **Cache-accounted tool-output cap** (opt-in). Oversized tool results are replaced by a head/tail window with the full output written to the session scratchpad, shrinking the provider payload without altering the durable transcript.
-- **Image TTL with a payback gate** (opt-in). Stale images are replaced by a text placeholder only when the recovered tokens repay the prompt-cache rewrite within a small payback window. A deferred eviction is re-priced on every turn, so enabling the TTL never taxes a short session.
-- **Phase-transition context janitor** (opt-in). Superseded failed tool output is compressed into deterministic tombstones at most once per window (`>= 40000` tokens and `>= 15` turns since the last prune), with the watermark persisted across resume. Messages are never dropped; tool-call/result pairing is preserved.
-- **Per-turn context statistics.** Each provider turn logs token and byte accounting plus cap/eviction/janitor counters, so steady-state spend is visible after the fact.
-- **RLM child idle deadline** (opt-in). A child run that stops producing activity is aborted with `RLM_CHILD_ORPHAN_TIMEOUT` instead of lingering; a child with a tool call in flight is exempt.
-- **Jev routing** (opt-in). An OpenRouter-backed classifier can screen `rlm.spawn` delegations before they start, answer a stop/continue question after tool turns, and drive a pre-turn retry router.
+## Key capabilities
 
-All controls ship disabled. A run with no flags set behaves like upstream.
+### Measurement
 
-### Flags
+- **Replay harness.** `npm run bench:replay` replays synthetic and recorded transcripts through the real transforms — the tool-output cap and the image-eviction planner — and prices every turn against a simulated SHA-256 prefix cache: `cacheRead`, `cacheWrite`, prefix breaks, tool-result bytes, resident image bytes. No provider, no clock, no RNG; repeated runs are byte-identical.
+- **Regression gates.** `--check` exits non-zero unless tool-result bytes fall to ≤20% of raw, `cacheWrite` stays within raw, and prefix breaks stay bounded by eviction events.
+- **Per-turn context stats.** Cap, eviction, and janitor counters are logged with the token/byte accounting each provider turn.
 
-| Env var | Default | Effect |
-|---|---|---|
-| `PRIME_AGENT_TOOL_OUTPUT_CAP` | `false` | enable the tool-output cap |
-| `PRIME_AGENT_TOOL_OUTPUT_MAX_LINES` / `_MAX_BYTES` / `_HEAD_RATIO` | `200` / `16384` / `0.6` | cap window shape |
-| `PRIME_AGENT_IMAGE_TTL` | `false` | enable image TTL eviction |
-| `PRIME_AGENT_IMAGE_TTL_TURNS` | `2` | assistant turns an image may stay resident before it becomes eviction-eligible |
-| `PRIME_AGENT_CONTEXT_JANITOR` | `false` | enable the context janitor |
-| `PRIME_AGENT_CONTEXT_JANITOR_TOKENS` / `_TURNS` | `40000` / `15` | prune thresholds |
-| `PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS` | `0` (off) | abort an idle child run after this many milliseconds |
-| `PRIME_AGENT_JEV_SPAWN_GATE` | `false` | reject trivial or redundant `rlm.spawn` delegations |
-| `PRIME_AGENT_JEV_ENABLED` | `false` | enable the Jev pre-turn router |
-| `PRIME_AGENT_JEV_STOP` | `false` | enable the Jev stop gate (requires `PRIME_AGENT_JEV_ENABLED`) |
-| `PRIME_AGENT_JEV_TOOLS` | empty | comma-separated allow-list of tools the pre-turn router may replay |
+### Context budget (opt-in)
 
-The Jev flags resolve their OpenRouter key from the agent's stored auth (`/login`, `~/.prime/agent/auth.json`). With no key, every gate fails open.
+- **Tool-output cap.** Oversized tool results keep a head/tail window in the payload; the full output goes to the session scratchpad. It runs at tool-result creation, so it never invalidates a cached prefix.
+- **Image TTL with a payback gate.** Stale images become a text placeholder — but only when the recovered tokens repay the cache rewrite within a small window. Otherwise the eviction is deferred and re-priced on the next turn. This is the non-obvious part: a prompt cache is immutable, so evicting a stale screenshot is a capital expense, not cleanup. An eviction that cannot amortize is a regression, and the gate refuses to pay for one.
+- **Context janitor.** Superseded failed tool output becomes a deterministic tombstone at most once per window (≥40k tokens and ≥15 turns since the last prune). Tool-call/result pairing survives; messages are never removed. The watermark persists across resume.
 
-## Build and run from source
+### Execution controls (opt-in)
 
-re-prime is source-only: the upstream installer script installs upstream Prime Agent, not this repository. Requires Node.js 22.8.0 or newer.
+- **Child idle deadline.** A child run with no tracked activity aborts with `RLM_CHILD_ORPHAN_TIMEOUT`; a child with a tool call in flight is exempt.
+- **Jev routing.** An OpenRouter-backed classifier can veto a trivial or redundant `rlm.spawn` before it starts, answer a stop/continue question after tool turns, and drive a pre-turn retry router.
+
+## Quickstart
+
+Node.js 22.8.0 or newer. There is no installer — the upstream install script installs upstream Prime Agent, not this repository.
 
 ```bash
 git clone https://github.com/Dakkshin/re-prime
 cd re-prime
 npm ci
-/path/to/re-prime/prime-agent.sh
+./prime-agent.sh          # runs from any directory, preserves your cwd
 ```
 
-`prime-agent.sh` can be invoked from any directory and preserves the caller's working directory. See [Development](packages/coding-agent/docs/development.md) for build details and repository rules.
+On first launch, run `/login`. The agent executes model-generated Python with your user permissions; read [Safety](#safety--disclaimers) before pointing it at anything you care about.
+
+Harness:
+
+```bash
+npm run bench:replay               # all workloads, human-readable summary
+npm run bench:replay -- --check    # non-zero exit on a gate regression
+npm run bench:replay -- --repeat 3 # determinism check
+```
+
+## Configuration & environment
+
+Precedence is **env > `contextBudget` settings > default**. Invalid values log a warning and fall back to the default; the resolver never throws.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `PRIME_AGENT_TOOL_OUTPUT_CAP` | `false` | enable the tool-output cap |
+| `PRIME_AGENT_TOOL_OUTPUT_MAX_LINES` | `200` | cap window line budget |
+| `PRIME_AGENT_TOOL_OUTPUT_MAX_BYTES` | `16384` | cap window byte budget |
+| `PRIME_AGENT_TOOL_OUTPUT_HEAD_RATIO` | `0.6` | head share of the kept window |
+| `PRIME_AGENT_IMAGE_TTL` | `false` | enable image TTL eviction |
+| `PRIME_AGENT_IMAGE_TTL_TURNS` | `2` | assistant turns before an image becomes eviction-eligible |
+| `PRIME_AGENT_CONTEXT_JANITOR` | `false` | enable the context janitor |
+| `PRIME_AGENT_CONTEXT_JANITOR_TOKENS` | `40000` | minimum tokens to prune |
+| `PRIME_AGENT_CONTEXT_JANITOR_TURNS` | `15` | minimum turns since the last prune |
+| `PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS` | `0` | idle deadline in milliseconds; `0` disables |
+| `PRIME_AGENT_JEV_SPAWN_GATE` | `false` | enable the `rlm.spawn` gate |
+| `PRIME_AGENT_JEV_ENABLED` | `false` | enable the pre-turn router |
+| `PRIME_AGENT_JEV_STOP` | `false` | enable the stop gate (requires `JEV_ENABLED`) |
+| `PRIME_AGENT_JEV_TOOLS` | empty | comma-separated tools the pre-turn router may replay |
+
+The Jev flags resolve their OpenRouter key from stored auth (`/login`, `~/.prime/agent/auth.json`). With no key — or on timeout or malformed response — every gate stays open.
+
+## Operational realities
+
+- **The harness models a bill; it does not produce one.** A prefix break is billed conservatively as a full-turn rewrite. Real provider pricing differs. The harness exists to compare variants deterministically, not to predict an invoice.
+- **Off by default.** A run with no flags set behaves like upstream. Enabling the cap or TTL changes the provider payload, never the durable transcript.
+- **Jev is best-effort.** It can reject work; it cannot corrupt a run. Failures fall open.
+- **The idle deadline bounds failure only.** It reaps a child that stopped reporting. It is not a task timeout and never kills a working child.
+- **Source-only.** No binaries, no release artifacts. `npm ci` per checkout.
+
+## Safety & disclaimers
 
 > [!WARNING]
 > Prime Agent executes model-generated Python and project commands with your user permissions. Its worker and kernel processes improve lifecycle isolation and recovery; they are **not** a security sandbox. Review changes and use trusted repositories, instructions, skills, and extensions only. Run untrusted code or instructions in an external sandbox or restricted environment.
 
-## What you get from upstream
-
-The full Prime Agent feature set remains available: a persistent Python REPL where file operations, shell commands, subagents, and context management happen programmatically; `rlm.spawn(...)` subagents; the Continual Harness (`/refine`); importable skills; daemon-backed background sessions; agent-to-agent messaging; persistent goals, heartbeats, schedules, and bounded autonomous mode. See the [documentation index](packages/coding-agent/docs/index.md) for the complete guide.
+re-prime is an independent derivative, not an official Prime Intellect release.
 
 ## Documentation
 
-- [Quickstart](packages/coding-agent/docs/quickstart.md) — install, authenticate, and run a first session
-- [Usage and CLI reference](packages/coding-agent/docs/usage.md) — commands, sessions, autonomous limits, and output modes
-- [Long-running and background agents](packages/coding-agent/docs/long-running-agents.md) — detach and reattach, goals, heartbeats, and schedules
-- [RLM programming model](packages/coding-agent/docs/rlm.md) — the persistent Python REPL, subagents, skills, and the trust model
-- [Architecture overview](packages/coding-agent/docs/architecture.md) — daemon, worker, kernel, and persistence boundaries
-- [Development](packages/coding-agent/docs/development.md) — build and run from source
+- [Quickstart](packages/coding-agent/docs/quickstart.md) · [Usage and CLI reference](packages/coding-agent/docs/usage.md) · [Long-running and background agents](packages/coding-agent/docs/long-running-agents.md)
+- [RLM programming model](packages/coding-agent/docs/rlm.md) · [Architecture overview](packages/coding-agent/docs/architecture.md) · [Development](packages/coding-agent/docs/development.md)
 
 ## Contributing
 
-This repository is an independent derivative. Issues and pull requests about the execution-engine changes are welcome here. Fixes to the core agent belong upstream in [PrimeIntellect-ai/prime-agent](https://github.com/PrimeIntellect-ai/prime-agent); upstream's [contribution guidelines](CONTRIBUTING.md) and [security policy](SECURITY.md) apply to that project.
+Issues and pull requests about the execution-engine changes are welcome here. Fixes to the core agent belong upstream in [PrimeIntellect-ai/prime-agent](https://github.com/PrimeIntellect-ai/prime-agent); upstream's [contribution guidelines](CONTRIBUTING.md) and [security policy](SECURITY.md) apply to that project.
 
 ## Acknowledgements
 
-re-prime is a fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by Prime Intellect and its authors (see [Citation](#citation)) — the agent, the harness, and the long-running-work design are theirs. The agent and TUI are in turn built on [`pi`](https://github.com/earendil-works/pi) by [Mario Zechner](https://github.com/mariozechner). We thank both.
+re-prime is a fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) by Prime Intellect and its authors (see [Citation](#citation)) — the agent, the harness, and the long-running-work design are theirs. The agent and TUI are in turn built on [`pi`](https://github.com/earendil-works/pi) by [Mario Zechner](https://github.com/mariozechner).
 
 ## License
 
-re-prime is released under the [MIT License](LICENSE). The original copyright notice is retained.
+[MIT](LICENSE). The original copyright notice is retained.
 
 © 2025 Mario Zechner<br/>
 © 2026 Dakkshin
