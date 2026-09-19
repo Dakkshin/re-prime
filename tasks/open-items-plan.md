@@ -1,7 +1,7 @@
-# Implementation Plan: Phase 3 - Closing the re-prime open items
+# Implementation Plan: Closing the re-prime open items
 
-Supersedes nothing. Phase 2 plan is `tasks/plan.md`. Scope comes from the
-"open items" list in `HANDOVER.md`.
+Not a numbered phase. Supersedes nothing. Phase 2 plan is `tasks/plan.md`.
+Scope comes from the "open items" list in `HANDOVER.md`.
 
 ## Overview
 
@@ -50,42 +50,42 @@ and `README.md` by G1/G5, so they are sequenced.
 
 ## Task list
 
-### Phase G1: Configurable payback window
-- [ ] `ImageTtlOptions.paybackTurns`; `DEFAULT_IMAGE_TTL.paybackTurns = 2`
-- [ ] `PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS` env + settings + precedence
-- [ ] tests: `context-budget.test.ts` precedence table
-- [ ] README flag table + caveat
+### G1: Configurable payback window
+- [x] `ImageTtlOptions.paybackTurns`; `DEFAULT_IMAGE_TTL.paybackTurns = 2`
+- [x] `PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS` env + settings + precedence
+- [x] tests: `context-budget.test.ts` precedence table
+- [x] README flag table + caveat
 
-### Phase G2: Janitor superseded successful dumps
-- [ ] `successDumpMinBytes` option + default 8192
-- [ ] signature-based supersession in `planContextJanitor`
-- [ ] `PRIME_AGENT_CONTEXT_JANITOR_SUCCESS_BYTES` + settings + wiring
-- [ ] tests: `context-janitor.test.ts` (approve, defer, flag-off)
+### G2: Janitor superseded successful dumps
+- [x] `successDumpMinBytes` option + default 8192
+- [x] signature-based supersession in `planContextJanitor`
+- [x] `PRIME_AGENT_CONTEXT_JANITOR_SUCCESS_BYTES` + settings + wiring
+- [x] tests: `context-janitor.test.ts` (approve, defer, flag-off)
 
-### Phase G3: /context per-turn stats
-- [ ] `context-stats.ts` bounded history helper (+ test)
-- [ ] `ContextTreeNode.recentStats?` populated on root
-- [ ] `formatContextTree` renders a recent-turns table
-- [ ] `DAEMON_SCHEMA_REVISION` 30 + `DAEMON_SCHEMA_ID` + comment
+### G3: /context per-turn stats
+- [x] `context-stats.ts` bounded history helper (+ test)
+- [x] `ContextTreeNode.recentStats?` populated on root
+- [x] `formatContextTree` renders a recent-turns table
+- [x] `DAEMON_SCHEMA_REVISION` 30 + `DAEMON_SCHEMA_ID` + comment
 
-### Phase G4: Genuine recorded trace
-- [ ] `benchmarks/lib/convert-session.ts` (trace mapping + redaction)
-- [ ] `benchmarks/fixtures/recorded-session-trace.jsonl` committed
-- [ ] `recorded` workload registered; `--check` passes
-- [ ] README workload mention
+### G4: Genuine recorded trace
+- [x] `benchmarks/lib/convert-session.ts` (trace mapping + redaction)
+- [x] `benchmarks/fixtures/recorded-session-trace.jsonl` committed
+- [x] `recorded` workload registered; `--check` passes
+- [x] README workload mention
 
-### Phase G5: Docs and hero
-- [ ] `docs/DIVERGENCE.md`
-- [ ] `docs/REPRODUCING.md`
-- [ ] rebrand `CONTRIBUTING.md`, `SECURITY.md`
-- [ ] README hero -> Unicode banner; refresh `todos`
+### G5: Docs and hero
+- [x] `docs/DIVERGENCE.md`
+- [x] `docs/REPRODUCING.md`
+- [x] rebrand `CONTRIBUTING.md`, `SECURITY.md`
+- [x] README hero -> Unicode banner; refresh `todos`
 
 ### Checkpoint Complete
-- [ ] `npm run check` exit 0; `npm run check:test-policy` clean
-- [ ] `npx tsx benchmarks/run-replay.ts --repeat 3 --check` exit 0
-- [ ] Every new/modified test file run directly and green
-- [ ] Changelog fragments added for `coding-agent`
-- [ ] Only files touched this session staged; pushed to `re-prime` via FF-main
+- [x] `npm run check` exit 0; `npm run check:test-policy` clean
+- [x] `npx tsx benchmarks/run-replay.ts --repeat 3 --check` exit 0
+- [x] Every new/modified test file run directly and green
+- [x] Changelog fragment added for `coding-agent`
+- [x] Only files touched this session staged; pushed to `re-prime` via FF-main
 
 ## Risks and mitigations
 
@@ -93,7 +93,7 @@ and `README.md` by G1/G5, so they are sequenced.
 |---|---|---|
 | Janitor over-compresses useful output | High | Opt-in, size threshold, exact-signature supersession only, messages never dropped |
 | Daemon wire change | Med | Optional field only; schema revision bumped; UI degrades when absent |
-| Committing real user data | High | Converter redacts cwd/home/secrets; fixture reviewed before commit |
+| Committing real user data | High | Converter redacts cwd/home/secrets; `--check` re-runs redaction over every fixture |
 | Test LOC parity | Med | Extend existing `it.each` suites; keep assertions tight |
 | `agent-session.ts` parallel edits | Med | Single-line call sites only; new logic in new modules |
 | Bench determinism with new workload | High | No clock/RNG in fixtures; redaction is deterministic |
