@@ -1,11 +1,11 @@
 # re-prime
 
 ```
-####  #####    '  ####  ####   ###  #   # #####
-#   # #       '   #   # #   #   #   ## ## #
-####  ####        ####  ####    #   # # # ####
-#  #  #           #     #  #    #   #   # #
-#   # #####       #     #   #  ###  #   # #####
+████  █████    ′  ████  ████   ███  █   █ █████
+█   █ █       ′   █   █ █   █   █   ██ ██ █
+████  ████        ████  ████    █   █ █ █ ████
+█  █  █           █     █  █    █   █   █ █
+█   █ █████       █     █   █  ███  █   █ █████
 
    prime again, minus the bloat
 ```
@@ -27,10 +27,10 @@ It is not an official Prime Intellect release, there are no binaries or installe
 - **a deterministic replay harness** (`npm run bench:replay`) that runs transcripts through the real transforms and prices every turn against a simulated prefix cache. No provider, no clock, no RNG, so repeated runs are byte-identical and `--check` can fail a build when a cache-write regression sneaks in.
 - **tool-output cap** — oversized tool results keep a head/tail window and the full output goes to the session scratchpad. It runs when the tool result is created, so it never busts the cache.
 - **image TTL with a payback gate** — stale screenshots become a text note, but only when the saving actually pays for breaking the cache. Explained below, it's the whole reason this exists.
-- **context janitor** — superseded failed tool output becomes a deterministic tombstone, at most once per window (≥40k tokens and ≥15 turns since the last prune). Messages are never dropped.
+- **context janitor** — superseded failed tool output becomes a deterministic tombstone, at most once per window (≥40k tokens and ≥15 turns since the last prune). A large *successful* result whose exact call is re-run later is tombstoned too. Messages are never dropped.
 - **child idle deadline** — a subagent that stopped reporting gets reaped with `RLM_CHILD_ORPHAN_TIMEOUT` instead of hanging around until you notice.
 - **Jev routing** — an OpenRouter classifier that can veto a pointless `rlm.spawn`, answer a stop/continue question after tool turns, and drive a pre-turn retry router.
-- **per-turn context stats** — cap/eviction/janitor counters get logged alongside the token accounting, so you can reconstruct where the tokens went after the fact.
+- **per-turn context stats** — cap/eviction/janitor counters get logged alongside the token accounting and surfaced in `/context` (recent turns), so you can reconstruct where the tokens went after the fact.
 
 ## the one idea worth explaining
 
@@ -67,7 +67,7 @@ npm run bench:replay -- --check    # non-zero exit if a gate regresses
 npm run bench:replay -- --repeat 3 # determinism check
 ```
 
-The docs live under [packages/coding-agent/docs](packages/coding-agent/docs/index.md) and are upstream's, mostly unmodified.
+The docs live under [packages/coding-agent/docs](packages/coding-agent/docs/index.md) and are upstream's, mostly unmodified. [docs/DIVERGENCE.md](docs/DIVERGENCE.md) lists exactly what this fork adds, and [docs/REPRODUCING.md](docs/REPRODUCING.md) walks through reproducing the numbers above.
 
 ## flags
 
@@ -79,8 +79,10 @@ All off by default. Precedence is env > `contextBudget` settings > default; bad 
 | `PRIME_AGENT_TOOL_OUTPUT_MAX_LINES` / `_MAX_BYTES` / `_HEAD_RATIO` | `200` / `16384` / `0.6` | the cap window |
 | `PRIME_AGENT_IMAGE_TTL` | `false` | enable image TTL eviction |
 | `PRIME_AGENT_IMAGE_TTL_TURNS` | `2` | turns an image may stay resident before it's eviction-eligible |
+| `PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS` | `2` | turns of recovered tokens an eviction may spend to repay the prefix break |
 | `PRIME_AGENT_CONTEXT_JANITOR` | `false` | enable the context janitor |
 | `PRIME_AGENT_CONTEXT_JANITOR_TOKENS` / `_TURNS` | `40000` / `15` | prune thresholds |
+| `PRIME_AGENT_CONTEXT_JANITOR_SUCCESS_BYTES` | `8192` | min size of a successful result that a later identical call may tombstone; `0` disables that pass |
 | `PRIME_AGENT_RLM_CHILD_IDLE_TIMEOUT_MS` | `0` | idle deadline in ms; `0` disables |
 | `PRIME_AGENT_JEV_SPAWN_GATE` | `false` | enable the `rlm.spawn` gate |
 | `PRIME_AGENT_JEV_ENABLED` | `false` | enable the pre-turn router |
@@ -95,15 +97,16 @@ The Jev flags read their OpenRouter key from stored auth (`/login`, `~/.prime/ag
 - The cap and the TTL change the provider payload, not the durable transcript. Reload and every byte is still there.
 - Jev can reject work; it can't corrupt a run. It fails open.
 - The idle deadline reaps a child that went quiet. It's not a task timeout and it won't kill a working one.
-- The 2-turn payback window is a policy constant, not a law of nature (`IMAGE_TTL_PAYBACK_TURNS` in `image-ttl.ts`, overridable per call). Raise it and you'll capture more long-run savings and eat more short-run losses.
+- The 2-turn payback window is a policy default, not a law of nature (`PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS`, or `paybackTurns` per call). Raise it and you'll capture more long-run savings and eat more short-run losses.
+- The janitor only tombstones a successful dump when a *later identical call* succeeds. A dump that is merely old, or re-read with different arguments, is left alone.
 - Source-only. No artifacts, `npm ci` per checkout.
 
 ## todos
 
-- check in a real recorded session as a default workload (the loader already takes JSONL, there just isn't a genuine trace in the repo)
-- make the payback window configurable instead of a constant
-- the janitor only rewrites failed tool results so far — superseded successful dumps are the obvious next target
-- a `/context` command that surfaces the per-turn stats instead of only logging them
+- the janitor tombstones superseded failed trajectories and re-run successful dumps; superseded successful dumps read with *different* arguments are still untouched
+- a genuine recorded session is checked in (`recorded` workload) — worth adding a second from a different task family
+- the replay models a bill, it doesn't produce one: a real-trace capture path that records provider usage would close that gap
+- the cap is global; a per-tool policy (e.g. never cap `read`) is the obvious next knob
 
 ## acknowledgements
 

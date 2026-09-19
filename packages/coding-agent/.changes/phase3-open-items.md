@@ -1,0 +1,4 @@
+- Added `PRIME_AGENT_IMAGE_TTL_PAYBACK_TURNS` (and `imageTtl.paybackTurns`) to make the image-eviction payback window configurable instead of a fixed constant.
+- Added `PRIME_AGENT_CONTEXT_JANITOR_SUCCESS_BYTES` so the janitor also tombstones a large successful tool result whose exact call is re-run successfully later; `0` disables that pass.
+- Added a "Recent turns" table to `/context` showing the per-turn cap, eviction, and janitor counters that were previously only logged.
+- Added a genuine recorded session as the `recorded` replay workload, plus a session-to-trace converter that redacts local paths and credentials.

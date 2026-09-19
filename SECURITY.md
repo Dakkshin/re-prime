@@ -1,10 +1,27 @@
 # Security Policy
 
+## What re-prime is
+
+re-prime is a fork of [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent).
+It runs model-generated code with your user permissions. It is **not a sandbox**
+and does not claim to be one. Use a disposable checkout or something you have
+backed up.
+
+The upstream project carries the security posture for the agent itself; report
+vulnerabilities in the agent there.
+
 ## Reporting a Vulnerability
 
-Do not report security vulnerabilities through public Issues, Discussions, or pull requests.
+Do not report security vulnerabilities through public Issues, Discussions, or
+pull requests.
 
-Send the report to [security@primeintellect.ai](mailto:security@primeintellect.ai). For encrypted communication and the current company-wide disclosure policy, see [primeintellect.ai/security](https://www.primeintellect.ai/security).
+- **Agent, TUI, providers, MCP, daemon:** report to
+  [security@primeintellect.ai](mailto:security@primeintellect.ai). For encrypted
+  communication and the current disclosure policy, see
+  [primeintellect.ai/security](https://www.primeintellect.ai/security).
+- **re-prime's own surface** (the replay harness, the context-budget flags, the
+  janitor, the child deadline, the spawn gate): open a private security advisory
+  on [Dakkshin/re-prime](https://github.com/Dakkshin/re-prime/security/advisories/new).
 
 Include the following when possible:
 
@@ -14,24 +31,24 @@ Include the following when possible:
 - The expected and observed impact
 - Any known mitigations
 
-Do not include real API keys, tokens, personal data, or credentials in the report. Use redacted or disposable test values.
+Do not include real API keys, tokens, personal data, or credentials in the
+report. Use redacted or disposable test values.
 
-## Behavioral release evaluation
+## Credentials
 
-The `pre-release` label enables a trusted behavioral evaluation before release. Exact base
-and head revisions build only inside isolated Prime sandboxes. GitHub runners treat their
-packages as opaque bytes and never execute or extract them. Model and sandbox credentials
-stay behind trusted Verifiers interception and are removed from candidate process
-environments. Separate durable approval and evaluation statuses prevent an in-flight evaluation
-from restoring approval after the label is removed. Both statuses are revoked when either candidate
-revision changes, and repository rules must require both with strict up-to-date enforcement. See
-[`scripts/evals/short_swe/README.md`](scripts/evals/short_swe/README.md)
-for the full boundary.
+re-prime reads provider credentials from stored auth (`/login`,
+`~/.prime/agent/auth.json`) and from environment variables; it does not add a
+credential store of its own. The harness never uses a credential: the replay is
+offline and has no provider, clock, or RNG. The trace converter
+(`benchmarks/lib/convert-session.ts`) redacts home paths, the local username, and
+common credential shapes before a fixture is committed, and `benchmark --check`
+re-runs that redaction over every committed fixture.
 
 ## What to Expect
 
-Maintainers will assess the report, determine its scope, and coordinate remediation and disclosure when appropriate. Please allow time for investigation before publishing details that could put users at risk.
+Maintainers will assess the report, determine its scope, and coordinate
+remediation and disclosure when appropriate. Please allow time for investigation
+before publishing details that could put users at risk.
 
-Security fixes are generally prepared against the default branch and released on a schedule chosen by the maintainers. We do not guarantee fixes for older versions.
-
-For ordinary bugs, feature requests, and support questions, use [GitHub Discussions](https://github.com/PrimeIntellect-ai/prime-agent/discussions).
+For ordinary bugs and support questions, use
+[GitHub Issues](https://github.com/Dakkshin/re-prime/issues).
