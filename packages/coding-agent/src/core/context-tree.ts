@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type { RlmChildAgentStatus } from "./agent-session.js";
 import { calculateContextTokens, estimateContextTokens } from "./compaction/index.js";
+import type { ContextStats } from "./context-stats.js";
 import type { ContextUsage } from "./extensions/index.js";
 import { buildSessionContext, type FileEntry, loadEntriesFromFile, type SessionEntry } from "./session-manager.js";
 import { addAssistantUsage, cloneUsage, emptyUsage, subtractAssistantUsage } from "./usage.js";
@@ -23,6 +24,8 @@ export interface ContextTreeNode {
 	ownUsage: Usage;
 	totalUsage: Usage;
 	contextUsage?: ContextUsage;
+	/** Most recent per-turn stats (oldest first); root only, when available. */
+	recentStats?: ContextStats[];
 	children: ContextTreeNode[];
 }
 

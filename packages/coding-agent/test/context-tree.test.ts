@@ -455,5 +455,30 @@ describe("formatContextTree", () => {
 		expect(output).not.toContain("├");
 		expect(output).toContain("Total: 1.0k tokens · $0.01");
 		expect(output).not.toContain("across");
+		expect(output).not.toContain("Recent turns");
+	});
+
+	it("renders the recent-turns counter table when stats are present", () => {
+		const root = node({
+			recentStats: [
+				{
+					turnIndex: 3,
+					inputTokens: 1200,
+					outputTokens: 340,
+					cacheReadTokens: 45000,
+					cacheWriteTokens: 800,
+					toolResultBytes: 15234,
+					imageBytes: 204800,
+					estimatedContextTokens: 21000,
+					toolResultsCapped: 2,
+					imagesEvicted: 1,
+					janitorCompressedMessages: 5,
+				},
+			],
+		});
+		const output = stripAnsi(formatContextTree(root, 100));
+		expect(output).toContain("Recent turns");
+		expect(output).toContain("janitor");
+		expect(output).toContain("21000");
 	});
 });

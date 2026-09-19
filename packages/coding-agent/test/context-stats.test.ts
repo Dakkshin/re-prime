@@ -2,8 +2,10 @@ import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { estimateContextTokens } from "../src/core/compaction/index.js";
 import {
+	CONTEXT_STATS_HISTORY_LIMIT,
 	contentByteSize,
 	createContextStatsAccumulator,
+	createContextStatsHistory,
 	estimateBase64Bytes,
 	formatContextStatsLine,
 	utf8Bytes,
@@ -31,6 +33,22 @@ function assistant(messageUsage: Usage): AssistantMessage {
 		usage: messageUsage,
 		stopReason: "stop",
 		timestamp: 0,
+	};
+}
+
+function stats(turnIndex: number) {
+	return {
+		turnIndex,
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		toolResultBytes: 0,
+		imageBytes: 0,
+		estimatedContextTokens: 0,
+		toolResultsCapped: 0,
+		imagesEvicted: 0,
+		janitorCompressedMessages: 0,
 	};
 }
 
@@ -93,6 +111,24 @@ describe("createContextStatsAccumulator", () => {
 		expect(stats.inputTokens).toBe(7);
 		expect(stats.outputTokens).toBe(3);
 		expect(stats.estimatedContextTokens).toBe(estimateContextTokens(messages).tokens);
+	});
+});
+
+describe("createContextStatsHistory", () => {
+	it.each([
+		[2, [2, 3]],
+		[CONTEXT_STATS_HISTORY_LIMIT, [1, 2, 3]],
+	])("keeps at most limit=%i turns oldest-first", (limit, expected) => {
+		const history = createContextStatsHistory(limit);
+		for (let turn = 1; turn <= 3; turn += 1) history.push(stats(turn));
+		expect(history.recent().map((entry) => entry.turnIndex)).toEqual(expected);
+	});
+
+	it("returns a copy, not the live buffer", () => {
+		const history = createContextStatsHistory(2);
+		history.push(stats(1));
+		history.recent().push(stats(99));
+		expect(history.recent()).toHaveLength(1);
 	});
 });
 

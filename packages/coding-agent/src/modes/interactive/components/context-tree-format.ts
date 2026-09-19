@@ -1,5 +1,6 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ContextStats } from "../../../core/context-stats.js";
 import type { ContextTreeNode } from "../../../core/context-tree.js";
 import type { ContextUsage } from "../../../core/extensions/index.js";
 import { addAssistantUsage, emptyUsage } from "../../../core/usage.js";
@@ -89,6 +90,41 @@ function padStartAnsi(text: string, width: number): string {
 
 function countNodes(root: ContextTreeNode): number {
 	return 1 + root.children.reduce((sum, child) => sum + countNodes(child), 0);
+}
+
+const RECENT_STAT_COLUMNS = [
+	["turn", 5],
+	["input", 8],
+	["output", 8],
+	["cacheRead", 10],
+	["cacheWrite", 11],
+	["estContext", 11],
+	["capped", 7],
+	["evicted", 8],
+	["janitor", 8],
+] as const;
+
+/** Per-turn cap/eviction/janitor counters the log line would otherwise hide. */
+function formatRecentTurns(stats: readonly ContextStats[]): string[] {
+	const applyRow = (cells: readonly (string | number)[]): string =>
+		cells.map((cell, index) => padStartAnsi(String(cell), RECENT_STAT_COLUMNS[index][1])).join("  ");
+	const lines = [theme.fg("dim", applyRow(RECENT_STAT_COLUMNS.map(([label]) => label)))];
+	for (const entry of stats) {
+		lines.push(
+			applyRow([
+				entry.turnIndex,
+				entry.inputTokens,
+				entry.outputTokens,
+				entry.cacheReadTokens,
+				entry.cacheWriteTokens,
+				entry.estimatedContextTokens,
+				entry.toolResultsCapped,
+				entry.imagesEvicted,
+				entry.janitorCompressedMessages,
+			]),
+		);
+	}
+	return lines;
 }
 
 /** Own usage summed over the whole tree: exact even while children are mid-run. */
@@ -194,6 +230,12 @@ export function formatContextTree(root: ContextTreeNode, width: number): string 
 				`${theme.fg("dim", "Current:")} ${rootContext.tokens.toLocaleString()} / ${rootContext.contextWindow.toLocaleString()} (${percent})`,
 			);
 		}
+	}
+
+	if (root.recentStats && root.recentStats.length > 0) {
+		lines.push("");
+		lines.push("Recent turns");
+		lines.push(...formatRecentTurns(root.recentStats));
 	}
 
 	return lines.join("\n");

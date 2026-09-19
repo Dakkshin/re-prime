@@ -37,6 +37,28 @@ export interface ContextStatsAccumulator {
 
 export type ContextStatsSink = (stats: ContextStats) => void;
 
+/** Turns kept for the /context "recent turns" table. */
+export const CONTEXT_STATS_HISTORY_LIMIT = 8;
+
+export interface ContextStatsHistory {
+	push(stats: ContextStats): void;
+	recent(): ContextStats[];
+}
+
+/** Bounded, oldest-first history of per-turn stats. */
+export function createContextStatsHistory(limit: number = CONTEXT_STATS_HISTORY_LIMIT): ContextStatsHistory {
+	const entries: ContextStats[] = [];
+	return {
+		push(stats) {
+			entries.push(stats);
+			if (entries.length > limit) entries.splice(0, entries.length - limit);
+		},
+		recent() {
+			return [...entries];
+		},
+	};
+}
+
 const logger = getLogger("context-stats");
 
 export function utf8Bytes(text: string): number {
